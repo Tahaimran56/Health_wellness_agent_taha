@@ -4,21 +4,23 @@ from tools.meal_planner import MealPlannerTool
 from tools.workout_recommender import WorkoutRecommenderTool
 from tools.scheduler import CheckinSchedulerTool
 from tools.tracker import ProgressTrackerTool
-from agentss.nutrition_expert_agent import NutritionExpertAgent
-from agentss.injury_support_agent import InjurySupportAgent
-from agentss.escalation_agent import EscalationAgent
+from agentss.nutrition_expert_agent import nutrition_agent
+from agentss.injury_support_agent import injury_agent
+from agentss.escalation_agent import escalation_agent
 
 health_agent = Agent(
     name="MainHealthPlanner",
-    instructions="You're a caring assistant helping users reach health goals.",
+    instructions="You're a caring assistant helping users reach health goals. if user has a goal, you should help them achieve it.",
     tools=[
         GoalAnalyzerTool,
         MealPlannerTool,
         WorkoutRecommenderTool,
         CheckinSchedulerTool,
         ProgressTrackerTool,
-        NutritionExpertAgent,
-        InjurySupportAgent,
-        EscalationAgent
-    ]
+    ],
+    handoffs=[
+        escalation_agent,
+        nutrition_agent,
+        injury_agent,
+    ],
 )
