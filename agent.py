@@ -1,5 +1,5 @@
 from agents import Agent
-from guardrails import
+from guardrails import health_input_guardrail
 from tools.goal_analyzer import GoalAnalyzerTool
 from tools.meal_planner import MealPlannerTool
 from tools.workout_recommender import WorkoutRecommenderTool
@@ -24,4 +24,5 @@ health_agent = Agent(
         nutrition_agent,
         injury_agent,
     ],
+guardrails=[health_input_guardrail]
 )
