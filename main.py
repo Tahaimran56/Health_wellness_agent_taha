@@ -1,49 +1,88 @@
-import os
+# main.py
+
+from agent import create_health_agent 
+from context import UserSessionContext
+from agents import Runner,OpenAIChatCompletionsModel,AsyncOpenAI,set_tracing_disabled
 from dotenv import load_dotenv
-from agent import health_agent
-from agents import AsyncOpenAI, OpenAIChatCompletionsModel, Runner, RunConfig
+from agents.run import RunConfig
+import asyncio, os
+from utils.streaming import stream_response
+from db.database import init_db, save_user_session, load_user_session
+from report.pdf_generator import PDFReportGenerator
+from config import model, config
 
-# Load API Key
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("GEMINI_API_KEY is  not set in .env regards taha")
+set_tracing_disabled(disabled=True)
 
-# Gemini setup
-client = AsyncOpenAI(
-    api_key=api_key,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-)
+print("*" * 5 ,"Health and Wellness AI Agent", "*" * 5,"\n")
+print("Type 'exit' or 'quit' to Finish.\n")
+print("Type 'report' to generate a PDF report of your session.\n")
 
-model = OpenAIChatCompletionsModel(
-    model="gemini-1.5-flash",
-    openai_client=client,
-)
+History_save = []
 
-config = RunConfig(
-    model=model,
-    model_provider=client,
-    tracing_disabled=True
-)
+async def main():
+    init_db()
+    # Optionally allow user to load previous session
+    while True:
+        user_id = input("Enter your user ID to resume session (or press Enter to start new): ").strip()
+        if not user_id:
+            user_context = UserSessionContext(name="khaid", uid=1001)
+            break
+        try:
+            user_id_int = int(user_id)
+            user_context = load_user_session(user_id_int)
+            if user_context:
+                print(f"[Session loaded for user: {user_context.name} (ID: {user_context.uid})]")
+            else:
+                print("No previous session found. Starting new session.")
+                user_context = UserSessionContext(name="Muhammad Ubaid Raza", uid=user_id_int)
+            break
+        except ValueError:
+            print("Please enter a valid numeric user ID or press Enter to start a new session.")
 
-# Terminal user
-print("welcome to taha Health and Wellness Agent")
-print("plzz Type ('exit') to quit... \n")
+    while True:
+        prompt = input("🧑 You : ")
+        if prompt.lower() in ['exit', 'quit']:
+            print("👋 Goodbye!")
+            break
+        if prompt.lower() == 'report':
+            # Generate PDF report
+            context_dict = user_context.model_dump()
+            pdf_gen = PDFReportGenerator(context_dict)
+            pdf_gen.generate_report()
+            continue
 
-history = []
+        user_context.messages.append({"role": "user", "content": prompt})
+        health_agent = create_health_agent(model)
 
-while True:
-    user_input = input("user input  : ")
-    if user_input.lower() == "exit":
-        print("bye have a great day..if u need any help contact us ")
-        break
+        try:
+            result = Runner.run_streamed(
+                health_agent,
+                prompt,
+                context=user_context,
+                run_config=config
+            )
+            await stream_response(result, user_context)
+            user_context.messages.append({"role": "assistant", "content": result.final_output})
+            # Save session after each interaction
+            save_user_session(user_context)
 
-    history.append({"role": "user", "content": user_input})
+        except Exception as e:
+            if "InputGuardrailTripwireTriggered" in str(e):
+                print("🛑 [Guardrail] Input not allowed (off-topic or unsafe).")
 
-    try:
-        result = Runner.run_sync(health_agent, history, run_config=config)
-        reply = result.final_output
-        print(f"Agent  is responding...: {reply}")
-        history.append({"role": "assistant", "content": reply})
-    except Exception as e:
-        print(f"oh sorry Error: {str(e)}")
+                # 🎯 Assistant explains what kind of input is expected
+                fallback_response = (
+                    "⚠️ Your input does not seem related to health, wellness, fitness, or nutrition. "
+                    "I can only assist with those topics.\n"
+                    "Please try again with a relevant question (e.g. 'I want to lose 5kg in 2 months')."
+                )
+
+                await stream_response(fallback_response, user_context)
+
+            else:
+                print(f"❌ [Unhandled Error] {e}")
+                await stream_response("⚠️ Sorry, an unexpected error occurred.", user_context)
+
+if __name__ == "__main__":
+    asyncio.run(main())
