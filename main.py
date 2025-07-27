@@ -1,5 +1,3 @@
-# main.py
-
 from agent import create_health_agent 
 from context import UserSessionContext
 from agents import Runner,OpenAIChatCompletionsModel,AsyncOpenAI,set_tracing_disabled
