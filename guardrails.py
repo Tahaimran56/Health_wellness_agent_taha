@@ -1,40 +1,75 @@
-from typing import Any, Dict
-class Agent:
-    def __init__(self, name: str, instructions: str):
-        self.name = name
-        self.instructions = instructions
+from agents.guardrail import input_guardrail, GuardrailFunctionOutput
+from agents.run import Runner
+from agents import RunContextWrapper, Agent
+from pydantic import BaseModel
+from agents import TResponseInputItem
 
-#runner logic
-class Runner:
-    @staticmethod
-    async def run(agent: Agent, input_text: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        # Basic goal valid check
-        if any(unit in input_text.lower() for unit in ['kg', 'pounds', 'lbs']) and \
-           any(time in input_text.lower() for time in ['week', 'month', 'year']):
-            return {"is_valid": True, "reason": "Valid goal format."}
-        else:
-            return {"is_valid": False, "reason": "Invalid format. Example: 'lose 5kg in 2 months'"}
+import os
+from dotenv import load_dotenv
+from agents import AsyncOpenAI, OpenAIChatCompletionsModel
+from agents.run import RunConfig
+from agents import set_tracing_disabled
 
-# Define agent
-goal_check_agent = Agent(
-    name="Goal Validator",
-    instructions="Check if the input goal is in valid format (e.g. 'lose 5kg in 2 months')"
+
+
+load_dotenv()
+set_tracing_disabled(disabled=True)
+
+API_KEY = os.getenv("GEMINI_API_KEY")
+if not API_KEY:
+    raise ValueError("Error: GEMINI_API_KEY not found in .env file. Add your Gemini API key to proceed.")
+
+external_client = AsyncOpenAI(
+    api_key=API_KEY,
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
 
-# Guardrail validation 
-async def validate_goal_input(ctx: Dict[str, Any], input_text: str) -> Dict[str, Any]:
-    result = await Runner.run(goal_check_agent, input_text, context=ctx)
-    return {
-        "output_info": result,
-        "tripwire_triggered": not result["is_valid"]
-    }
+model = OpenAIChatCompletionsModel(
+    model="gemini-2.0-flash",
+    openai_client=external_client
+)
 
-import asyncio
+config = RunConfig(
+    model=model,
+    model_provider=external_client
+)
 
-async def test():
-    context = {"user_id": 123}
-    input_text = "lose 5kg in 2 months"
-    validation_result = await validate_goal_input(context, input_text)
-    print(validation_result)
+# Define output type
+class HealthInputOutput(BaseModel):
+    is_health_related_question: bool
+    input: str
+    reasoning: str
+    answer: str
 
-asyncio.run(test())
+# Define agent used for input validation
+health_guardrail_agent = Agent(
+    name="Health Input Guardrail Agent",
+    instructions=(
+    "You are a smart assistant that checks whether a user's message is related to health or wellness. "
+    "Valid topics include health, fitness, diet, workout, exercise, goal setting, progress tracking, meal planning, "
+    "nutrition, injuries, wellness, and check-ins. You should also accept greetings like 'hi', 'hello', or 'hey' "
+    "as valid input. If the message is clearly unrelated to these topics, mark it as not health-related."
+),
+    output_type=HealthInputOutput,
+    model=model
+)
+
+# actual guardrail function
+@input_guardrail
+async def health_input_guardrail(
+    ctx: RunContextWrapper[None],
+    agent: Agent,
+    input:str | list[TResponseInputItem]
+) -> GuardrailFunctionOutput:
+    try:
+        result = await Runner.run(health_guardrail_agent, input, context=ctx.context, run_config=config)
+        return GuardrailFunctionOutput(
+            output_info=result.final_output,
+            tripwire_triggered=not result.final_output.is_health_related_question
+        )
+    except Exception as e:
+        print(f"[Guardrail Error] Input validation failed: {e}")
+        return GuardrailFunctionOutput(
+            output_info=None,
+            tripwire_triggered=True
+        )
